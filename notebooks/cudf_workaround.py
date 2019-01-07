@@ -95,7 +95,10 @@ def compute_skew_with_mean(array,skew,mean):
         n = len(array)
         m3 = skew[0]/(len(array))
         m2 = skew[TPB]
-        skew[0] = math.sqrt((n-1.0)*n)/(n-2.0)*m3/m2**1.5
+        if m2>0 and n>2:
+            skew[0] = math.sqrt((n-1.0)*n)/(n-2.0)*m3/m2**1.5
+        else:
+            skew[0] = 0
     cuda.syncthreads()
 
 @cuda.jit(device=True)
@@ -132,7 +135,10 @@ def compute_kurtosis_with_mean(array,skew,mean):
         m4 = skew[0]/(len(array))
         m2 = skew[TPB]
         #skew[0] = math.sqrt((n-1.0)*n)/(n-2.0)*m3/m2**1.5
-        skew[0] = 1.0/(n-2)/(n-3)*((n*n-1.0)*m4/m2**2.0-3*(n-1)**2.0)
+        if n>3 and m2>0:
+            skew[0] = 1.0/(n-2)/(n-3)*((n*n-1.0)*m4/m2**2.0-3*(n-1)**2.0)
+        else:
+            skew[0] = 0
     cuda.syncthreads()
 
 @cuda.jit(device=True)
@@ -224,7 +230,7 @@ def gd_group_apply_skew(ds_in,ds_out):
 @cuda.jit(device=True)
 def gd_group_apply_kurtosis(ds_in,ds_out):
     kurtosis = cuda.shared.array(shape=(TPB1), dtype=float32)
-    compute_kurtosis(ds_in,)
+    compute_kurtosis(ds_in,kurtosis)
     for i in range(cuda.threadIdx.x, len(ds_in), cuda.blockDim.x):
         ds_out[i] = kurtosis[0]
 
@@ -266,14 +272,28 @@ def cudf_groupby_agg(df,idcol,col,func_name):
     dg.drop_column(meancol)
     return dg
 
-def cudf_groupby_aggs(df,idcol,aggs):
-    # python trick to get named arguments
+def cudf_groupby_aggs(df,group_id_col,aggs):
+    """
+    Parameters
+    ----------
+    df : cudf dataframe
+        dataframe to be grouped
+    group_id_col : string
+        name of the column which is used as the key of the group
+    aggs : dictionary
+        key is the name of column for which aggregation is calculated
+        values is the name of function for aggregation
+    Returns
+    -------
+    dg : cudf dataframe
+        result of groupby aggregation
+    """
     dg = None
     for col,funcs in aggs.items():
         for func in funcs:
             if dg is None:
-                dg = cudf_groupby_agg(df,idcol,col,func)
+                dg = cudf_groupby_agg(df,group_id_col,col,func)
             else:
-                tmp = cudf_groupby_agg(df,idcol,col,func)
-                dg = dg.merge(tmp,on=[idcol],how='left')
+                tmp = cudf_groupby_agg(df,group_id_col,col,func)
+                dg = dg.merge(tmp,on=[group_id_col],how='left')
     return dg
